@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SETカード 3枚組パターン認識</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white min-h-screen flex flex-col items-center p-4">
+<h1 class="text-2xl font-bold mb-1 text-center">🃏 SETカード トレーナー</h1>
+<p class="text-gray-400 text-sm mb-2 text-center">3枚の「SET」（全属性が全部同じ or 全部違う）を見つけてクリック</p>
+<div class="flex gap-4 mb-3 text-sm">
+  <span>⏱ <span id="timer">0</span>s</span>
+  <span>スコア: <span id="score" class="text-yellow-400 font-bold">0</span></span>
+  <span>残り: <span id="remaining" class="text-blue-400 font-bold">0</span>組</span>
+</div>
+<div id="board" class="grid grid-cols-4 gap-2 mb-4" style="max-width:520px"></div>
+<div id="feedback" class="text-center text-sm font-bold min-h-6 mb-3"></div>
+<div class="flex gap-3">
+  <button id="newGame" class="bg-indigo-600 hover:bg-indigo-500 px-5 py-2 rounded font-bold transition">新しいゲーム</button>
+  <button id="hintBtn" class="bg-gray-700 hover:bg-gray-600 px-5 py-2 rounded text-sm transition">💡 ヒント</button>
+</div>
+<div class="mt-3 text-xs text-gray-600 text-center">
+  属性: 数(1,2,3) × 色(赤,緑,紫) × 形(◇,◯,~) × 塗り(空,縞,塗)
+</div>
+<script>
+// Card: [number(1-3), color(0-2), shape(0-2), fill(0-2)]
+const COLORS=['#e53e3e','#38a169','#805ad5'];
+const COLOR_NAMES=['赤','緑','紫'];
+const SHAPES=['diamond','oval','wave'];
+const FILLS=['open','striped','solid'];
+
+let deck,tableCards,selected,score,timerID,elapsed,setsFound,gameOver;
+
+function makeCard(n,c,s,f){ return [n,c,s,f]; }
+
+function allCards(){
+  const cards=[];
+  for(let n=1;n<=3;n++) for(let c=0;c<3;c++) for(let s=0;s<3;s++) for(let f=0;f<3;f++) cards.push(makeCard(n,c,s,f));
+  return cards;
+}
+
+function isSet(a,b,c){
+  for(let i=0;i<4;i++){
+    const vals=new Set([a[i],b[i],c[i]]);
+    if(vals.size===2) return false;
+  }
+  return true;
+}
+
+function findAllSets(cards){
+  const sets=[];
+  for(let i=0;i<cards.length;i++) for(let j=i+1;j<cards.length;j++) for(let k=j+1;k<cards.length;k++){
+    if(isSet(cards[i],cards[j],cards[k])) sets.push([i,j,k]);
+  }
+  return sets;
+}
+
+function drawCard(card, selected, hinted){
+  const [n,c,s,f]=card;
+  const color=COLORS[c];
+  const W=90, H=130;
+  const cv=document.createElement('canvas');
+  cv.width=W; cv.height=H;
+  const ctx=cv.getContext('2d');
+
+  // Background
+  const bg=selected?'#4a5568':hinted?'#2d3748':'#1a202c';
+  const border=selected?'#f6e05e':hinted?'#68d391':'#4a5568';
+  ctx.fillStyle=bg;
+  ctx.roundRect(0,0,W,H,8);
+  ctx.fill();
+  ctx.strokeStyle=border;
+  ctx.lineWidth=selected||hinted?3:1.5;
+  ctx.roundRect(1,1,W-2,H-2,8);
+  ctx.stroke();
+
+  // Draw n symbols
+  const margin=12, symH=(H-2*margin)/3;
+  for(let i=0;i<n;i++){
+    const sy=margin + (3-n)/2*symH + i*symH;
+    const cx=W/2, cy=sy+symH*0.4;
+    const sw=50, sh=18;
+    ctx.strokeStyle=color;
+    ctx.fillStyle=color;
+    ctx.lineWidth=2;
+    if(s===0){ // diamond
+      ctx.beginPath();
+      ctx.moveTo(cx,cy-sh); ctx.lineTo(cx+sw/2,cy); ctx.lineTo(cx,cy+sh); ctx.lineTo(cx-sw/2,cy);
+      ctx.closePath();
+    } else if(s===1){ // oval
+      ctx.beginPath();
+      ctx.ellipse(cx,cy,sw/2,sh,0,0,Math.PI*2);
+    } else { // wave/squiggle
+      ctx.beginPath();
+      ctx.moveTo(cx-sw/2,cy);
+      ctx.bezierCurveTo(cx-sw/4,cy-sh*1.5,cx+sw/4,cy+sh*1.5,cx+sw/2,cy);
+    }
+    if(f===0){ ctx.stroke(); } // open
+    else if(f===2){ ctx.fill(); } // solid
+    else { // striped
+      ctx.save(); ctx.clip();
+      ctx.fillStyle='transparent'; ctx.fill();
+      for(let x=cx-sw/2;x<cx+sw/2;x+=5){
+        ctx.beginPath(); ctx.moveTo(x,cy-sh*2); ctx.lineTo(x,cy+sh*2); ctx.stroke();
+      }
+      ctx.restore();
+      ctx.stroke();
+    }
+  }
+  return cv;
+}
+
+function render(){
+  const board=document.getElementById('board');
+  board.innerHTML='';
+  tableCards.forEach((card,i)=>{
+    const isSel=selected.includes(i);
+    const isHint=hintIndices&&hintIndices.includes(i);
+    const cv=drawCard(card,isSel,isHint);
+    cv.style.cursor='pointer';
+    cv.style.borderRadius='8px';
+    cv.style.transition='transform 0.1s';
+    cv.addEventListener('click',()=>toggleSelect(i));
+    board.appendChild(cv);
+  });
+  const allSets=findAllSets(tableCards);
+  document.getElementById('remaining').textContent=allSets.length;
+}
+
+let hintIndices=null;
+
+function toggleSelect(i){
+  if(gameOver) return;
+  hintIndices=null;
+  if(selected.includes(i)){ selected=selected.filter(x=>x!==i); }
+  else { selected.push(i); }
+  if(selected.length===3){
+    const [a,b,c]=selected.map(i=>tableCards[i]);
+    if(isSet(a,b,c)){
+      score++;setsFound++;
+      document.getElementById('score').textContent=score;
+      document.getElementById('feedback').textContent='✅ SET！';
+      document.getElementById('feedback').className='text-center text-sm font-bold min-h-6 mb-3 text-green-400';
+      // Replace found cards
+      selected.sort((a,b)=>b-a).forEach(i=>tableCards.splice(i,1));
+      selected=[];
+      if(tableCards.length<12 && deck.length>=3){
+        tableCards.push(deck.pop(),deck.pop(),deck.pop());
+      }
+      if(findAllSets(tableCards).length===0){
+        if(deck.length===0){
+          document.getElementById('feedback').textContent=`🎉 ゲームクリア！ スコア: ${score}`;
+          gameOver=true;
+        } else {
+          tableCards.push(deck.pop(),deck.pop(),deck.pop());
+        }
+      }
+    } else {
+      document.getElementById('feedback').textContent='❌ SETではありません';
+      document.getElementById('feedback').className='text-center text-sm font-bold min-h-6 mb-3 text-red-400';
+      selected=[];
+    }
+  }
+  render();
+}
+
+function init(){
+  clearInterval(timerID);
+  const all=allCards();
+  for(let i=all.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[all[i],all[j]]=[all[j],all[i]];}
+  deck=all.slice(12);
+  tableCards=all.slice(0,12);
+  selected=[]; score=0; setsFound=0; elapsed=0; gameOver=false; hintIndices=null;
+  document.getElementById('score').textContent=0;
+  document.getElementById('timer').textContent=0;
+  document.getElementById('feedback').textContent='';
+  timerID=setInterval(()=>{elapsed++;document.getElementById('timer').textContent=elapsed;},1000);
+  render();
+}
+
+document.getElementById('newGame').addEventListener('click',init);
+document.getElementById('hintBtn').addEventListener('click',()=>{
+  const sets=findAllSets(tableCards);
+  if(sets.length>0){ hintIndices=sets[0]; selected=[]; render(); }
+});
+
+init();
+</script>
+</body>
+</html>
